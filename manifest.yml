@@ -1,0 +1,216 @@
+modules:
+  # Panel on every Jira work item: run a check, see the verdict and evidence, post the receipt.
+  jira:issuePanel:
+    - key: counterparty-panel
+      resource: panel
+      resolver:
+        function: resolver
+      render: native
+      title: Counterparty check
+      icon: resource:static;icon.svg
+
+  # One page listing every screened counterparty, with verdict counts and a rescreen button.
+  jira:globalPage:
+    - key: counterparty-register
+      resource: register
+      resolver:
+        function: resolver
+      render: native
+      title: Counterparty register
+      icon: resource:static;icon.svg
+
+  # Index the stored result so JQL works: counterpartyVerdict = BLOCK, counterpartyChecked < -30d.
+  jira:entityProperty:
+    - key: counterparty-index
+      entityType: issue
+      propertyKey: counterparty
+      values:
+        - path: verdict
+          type: string
+          searchAlias: counterpartyVerdict
+        - path: vendor
+          type: text
+          searchAlias: counterpartyVendor
+        - path: legalName
+          type: text
+          searchAlias: counterpartyLegalName
+        - path: checkedAt
+          type: date
+          searchAlias: counterpartyChecked
+        - path: flagged
+          type: string
+          searchAlias: counterpartyFlaggedSource
+
+  # Screens run on a queue so the panel never waits on the 25-second UI limit.
+  consumer:
+    - key: screening-consumer
+      queue: screening-queue
+      function: consumer-fn
+
+  # New intake tickets ("Vendor: Acme Corp" or label "vendor") are screened automatically.
+  trigger:
+    - key: intake-trigger
+      function: created-fn
+      events:
+        - avi:jira:created:issue
+
+  # Sanctions and exclusion lists change, so open counterparties are rescreened every day.
+  scheduledTrigger:
+    - key: daily-rescreen
+      function: rescreen-fn
+      interval: day
+
+  # Rovo agent that screens counterparties and explains the evidence in plain language.
+  rovo:agent:
+    - key: counterparty-analyst
+      name: Counterparty Analyst
+      description: Screens vendors, suppliers and partners against U.S. sanctions,
+        healthcare exclusions, legal entity, SEC, federal contract, FDA recall
+        and CFPB complaint records, then posts an auditable receipt to the Jira
+        work item.
+      icon: https://raw.githubusercontent.com/Mattbusel/counterparty-for-jira/main/static/agent.svg
+      prompt: resource:prompts;agent-prompt.txt
+      conversationStarters:
+        - Screen the vendor on this work item and post the receipt
+        - Is Sberbank Capital safe to pay?
+        - Which counterparties are flagged for review or blocked?
+        - Explain why this vendor needs review
+      actions:
+        - screen-counterparty
+        - screen-issue-counterparty
+        - list-counterparties
+        - get-counterparty-receipt
+
+  action:
+    - key: screen-counterparty
+      name: Screen a counterparty
+      function: action-screen-fn
+      actionVerb: GET
+      description: >
+        Screen a company or person name against OFAC sanctions, HHS-OIG
+        exclusions, GLEIF entity and parent records, SEC filings, federal
+        contracts, FDA recalls and CFPB complaints. Returns CLEAR, REVIEW or
+        BLOCK with evidence links. Read-only.
+      inputs:
+        counterpartyName:
+          title: Counterparty name
+          type: string
+          required: true
+          description: The legal or trading name of the company or person to screen, for
+            example "Acme Medical Supply Inc."
+    - key: screen-issue-counterparty
+      name: Screen the counterparty on a work item
+      function: action-screen-issue-fn
+      actionVerb: UPDATE
+      description: >
+        Screen the counterparty named on a Jira work item, store the result on
+        it (searchable in JQL), set the verdict label and post the receipt
+        comment. Use when asked to check or vet the vendor on a work item.
+      inputs:
+        issueKey:
+          title: Work item key
+          type: string
+          required: false
+          description: The Jira work item key, for example VO-12. Leave empty to use the
+            work item the user is viewing.
+        counterpartyName:
+          title: Counterparty name
+          type: string
+          required: false
+          description: Optional name to screen. Leave empty to use the name already on the
+            work item.
+    - key: list-counterparties
+      name: List screened counterparties
+      function: action-list-fn
+      actionVerb: GET
+      description: >
+        List counterparties screened in this Jira site with latest verdict,
+        reasons, check date and receipt id. Optionally filter by verdict CLEAR,
+        REVIEW or BLOCK.
+      inputs:
+        verdict:
+          title: Verdict filter
+          type: string
+          required: false
+          description: One of CLEAR, REVIEW or BLOCK. Leave empty for all.
+    - key: get-counterparty-receipt
+      name: Get a counterparty receipt
+      function: action-receipt-fn
+      actionVerb: GET
+      description: >
+        Get the stored counterparty check for a Jira work item: verdict,
+        reasons, each source with its data version, evidence links and earlier
+        checks.
+      inputs:
+        issueKey:
+          title: Work item key
+          type: string
+          required: false
+          description: The Jira work item key, for example VO-12. Leave empty to use the
+            work item the user is viewing.
+
+  # The same four tools, exposed to Rovo Studio agents and to external MCP clients.
+  rovo:mcp:
+    - key: counterparty-mcp
+      name: Counterparty MCP
+      tools:
+        - screen-counterparty
+        - screen-issue-counterparty
+        - list-counterparties
+        - get-counterparty-receipt
+
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: consumer-fn
+      handler: index.consumer
+      timeoutSeconds: 300
+    - key: created-fn
+      handler: index.onIssueCreated
+    - key: rescreen-fn
+      handler: index.dailyRescreen
+      timeoutSeconds: 120
+    - key: action-screen-fn
+      handler: index.actionScreen
+    - key: action-screen-issue-fn
+      handler: index.actionScreenIssue
+    - key: action-list-fn
+      handler: index.actionListFlagged
+    - key: action-receipt-fn
+      handler: index.actionGetReceipt
+
+resources:
+  - key: panel
+    path: src/frontend/panel.jsx
+  - key: register
+    path: src/frontend/register.jsx
+  - key: static
+    path: static
+  - key: prompts
+    path: prompts
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - storage:app
+  external:
+    fetch:
+      backend:
+        - address: sanctionslistservice.ofac.treas.gov
+        - address: wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com
+        - address: oig.hhs.gov
+        - address: api.gleif.org
+        - address: efts.sec.gov
+        - address: data.sec.gov
+        - address: www.sec.gov
+        - address: api.usaspending.gov
+        - address: www.consumerfinance.gov
+        - address: api.fda.gov
+
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 1024
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/d86d1b88-c157-40ff-926b-288eeec0bb41

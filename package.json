@@ -1,0 +1,28 @@
+{
+  "name": "counterparty-for-jira",
+  "version": "1.0.0",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/core.test.js",
+    "test:live": "node --test test/live.test.js",
+    "screen": "node scripts/screen.mjs",
+    "lint": "eslint src/**/*"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "puppeteer-core": "^24.43.1"
+  },
+  "dependencies": {
+    "@forge/api": "^8.4.0",
+    "@forge/bridge": "7.2.1-next.13",
+    "@forge/events": "^3.0.9",
+    "@forge/kvs": "^2.1.1",
+    "@forge/react": "12.4.0-next.3",
+    "@forge/resolver": "2.0.2-next.0",
+    "react": "^18.2.0"
+  },
+  "type": "module",
+  "description": "Counterparty: third-party due diligence with receipts, inside Jira (Atlassian Forge app).",
+  "author": "Tensorust LLC"
+}
